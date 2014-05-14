@@ -16,29 +16,29 @@
          reset_parser/1,
          free_parser/1]).
 
--export_type([parser/0]).
--export_type([parser_opt/0]).
+-export_type([xmlstreamstart/0,
+              xmlstreamend/0,
+              xmlstreamelement/0,
+              parser/0,
+              parser_opt/0]).
 
+-record(config, {infinite_stream :: boolean(),
+                 autoreset :: boolean()}).
+
+-record(parser, {event_parser :: exml_event:c_parser(),
+                 config :: parser_cfg(),
+                 stack = [] :: list()}).
+
+-type xmlstreamstart() :: #xmlstreamstart{}.
+-type xmlstreamend() :: #xmlstreamend{}.
+-type xmlstreamelement() :: exml:xmlel() | xmlstreamstart() | xmlstreamend().
+-type parser_cfg() :: #config{}.
+-type parser() :: #parser{}.
 %% infinite_stream - no distinct "stream start" or "stream end", only #xmlel{} will be returned
 %% autoreset - will reset expat after each parsed document
 %%             use only when complete xml document is sent to the parser
 %%             for example XMPP over WebSocekts - http://tools.ietf.org/html/draft-ietf-xmpp-websocket
 -type parser_opt() :: {infinite_stream, boolean()} | {autoreset, boolean()}.
-
--record(config, {
-    infinite_stream :: boolean(),
-    autoreset :: boolean()
-}).
-
--type parser_cfg() :: #config{}.
-
--record(parser, {
-          event_parser :: exml_event:c_parser(),
-          config :: parser_cfg(),
-          stack = [] :: list()
-         }).
-
--type parser() :: #parser{}.
 
 %%%===================================================================
 %%% Public API
@@ -137,7 +137,7 @@ parse_events([{xml_cdata, CData} | Rest], [Element | Stack], Acc, InfiniteStream
 xml_element(#xmlel{children = Children} = Element) ->
     Element#xmlel{children = xml_children(Children, [])}.
 
--spec xml_children(list(xmlterm()), list(xmlterm())) -> list(xmlterm()).
+-spec xml_children(list(exml:xmlterm()), list(exml:xmlterm())) -> list(exml:xmlterm()).
 xml_children([], Children) ->
     Children;
 xml_children([#xmlcdata{content = Content1}, #xmlcdata{content = Content2} | Rest], Children) ->
