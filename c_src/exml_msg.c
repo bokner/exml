@@ -260,7 +260,7 @@ static ERL_NIF_TERM parse(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
                                    enif_make_string(env, errstring, ERL_NIF_LATIN1));
         }
 
-    return enif_make_tuple(env, 2, OK, parser_data->result);
+    return OK;
 };
 
 static int load(ErlNifEnv* env, void **priv, ERL_NIF_TERM info)
@@ -296,10 +296,10 @@ static void unload(ErlNifEnv* env, void* priv)
 
 static ErlNifFunc funcs[] =
     {
-        {"new_parser", 0, new_parser},
-        {"reset_parser", 1, reset_parser},
-        {"free_parser", 1, free_parser},
+        {"new_parser_nif", 0, new_parser},
+        {"reset_parser_nif", 1, reset_parser},
+        {"free_parser_nif", 1, free_parser},
         {"parse_nif", 3, parse}
     };
 
-ERL_NIF_INIT(exml_event, funcs, &load, &reload, &upgrade, &unload);
+ERL_NIF_INIT(exml_msg, funcs, &load, &reload, &upgrade, &unload);
