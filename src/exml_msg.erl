@@ -7,6 +7,7 @@
 -export([load/0]).
 -export([
 		 new_parser/0,
+		 new_parser/1,
          reset_parser/1,
          free_parser/1,
          parse/2]).
@@ -26,6 +27,17 @@
 
 -define(APPNAME, exml).
 -define(LIBNAME, exml_msg).
+
+-define(DEFAULT_HANDLER, exml_default_handler).
+
+-define(NO_STREAM, <<>>).
+
+-record(state, {event_parser :: exml_event:c_parser(),
+				level = 0 :: integer(),  
+				stream_tag = <<>> :: binary(),
+				handler :: function(), 
+				handler_state :: any()				
+}).
 
 %% ====================================================================
 %% API functions
@@ -47,15 +59,34 @@ load() ->
 
 -spec new_parser() -> {ok, msg_parser()}.
 new_parser() ->
+	new_parser([]).
+
+-spec new_parser([{any(), any()}]) -> {ok, msg_parser()}.
+new_parser(Opts) ->
     try
         {ok, EventParser} = new_parser_nif(),
-		{ok, _Pid} = gen_server:start_link(?MODULE, [EventParser], [])
+		{ok, _Pid} = gen_server:start_link(?MODULE, [EventParser, Opts], [])
     catch
         E:R ->
             {error, {E, R}}
     end.
 
-%% NIFs
+-spec reset_parser(msg_parser()) -> ok.
+reset_parser(Parser) ->
+	gen_server:call(Parser, reset_parser).
+
+-spec free_parser(msg_parser()) -> ok.
+free_parser(Parser) ->
+    gen_server:call(Parser, free_parser).
+
+-spec parse(msg_parser(), binary()) -> ok.
+parse(Parser, Data) ->
+	gen_server:cast(Parser, {parse, Data}).
+
+
+%% ====================================================================
+%% NIF interface
+%% ====================================================================
 -spec new_parser_nif() -> {ok, exml_event:c_parser()}.
 new_parser_nif() ->
     erlang:nif_error(not_loaded).
@@ -72,25 +103,9 @@ free_parser_nif(_Parser) ->
 parse_nif(Parser, Data, Final) ->
     erlang:nif_error(not_loaded, [Parser, Data, Final]).
 
-%% End of NIFs
-
--spec reset_parser(msg_parser()) -> ok.
-reset_parser(Parser) ->
-	gen_server:call(Parser, reset_parser).
-
--spec free_parser(msg_parser()) -> ok.
-free_parser(Parser) ->
-    gen_server:call(Parser, free_parser).
-
--spec parse(msg_parser(), binary()) -> ok.
-parse(Parser, Data) ->
-	gen_server:cast(Parser, {parse, Data}).
-
-
 %% ====================================================================
 %% Behavioural functions 
 %% ====================================================================
--record(state, {event_parser :: exml_event:c_parser(), level :: integer()}).
 
 %% init/1
 %% ====================================================================
@@ -104,8 +119,13 @@ parse(Parser, Data) ->
 	State :: term(),
 	Timeout :: non_neg_integer() | infinity.
 %% ====================================================================
-init([EventParser]) ->
-    {ok, #state{event_parser = EventParser, level = 0}}.
+init([EventParser, Opts]) ->
+	HandlerModule = proplists:get_value(handler, Opts, ?DEFAULT_HANDLER),
+	HandlerData = proplists:get_value(handler_data, Opts),
+    {ok, #state{event_parser = EventParser,
+				stream_tag  =  proplists:get_value(stream_tag, Opts, <<"stream">>),
+				handler = proplists:get_value(handler, Opts, exml_default_handler),
+				handler_state = HandlerModule:init(HandlerData)}}.
 
 
 %% handle_call/3
@@ -127,7 +147,7 @@ init([EventParser]) ->
 %% ====================================================================
 handle_call(reset_parser, _From, State) ->
 	reset_parser_nif(State#state.event_parser),
-    {reply, ok, State#state{level = 0}};
+    {reply, ok, State#state{handler_state = reset, level = 0}};
 
 handle_call(free_parser, _From, State) ->
 	free_parser_nif(State#state.event_parser),
@@ -168,24 +188,35 @@ handle_cast(_Msg, State) ->
 	NewState :: term(),
 	Timeout :: non_neg_integer() | infinity.
 %% ====================================================================
-handle_info({xml_element_start, Name, XmlNS, Attrs}, #state{level = Level} = State) ->
-	io:format("<~s ~s>~n", [Name, attrs_to_iolist(Attrs, [])]),
-    {noreply, State#state{level = Level + 1}};
-handle_info({xml_element_end, Name}, #state{level = Level} = State) ->
-	io:format("</~s>~n", [Name]),
+handle_info({xml_element_start, Name, XmlNS, Attrs}, 
+		#state{level = Level, handler = Handler, handler_state = HandlerState, stream_tag = StreamTag} = State) 
+			when Level == 0 andalso Name == StreamTag -> %% Stream starts
+    {noreply, State#state{level = Level + 1, 
+				handler_state = Handler:stream_start(Name, XmlNS, Attrs, HandlerState)}};
+
+handle_info({xml_element_start, Name, XmlNS, Attrs}, 
+	#state{level = Level, handler = Handler, handler_state = HandlerState} = State)  -> %% Element starts
+    {noreply, State#state{level = Level + 1, 
+				handler_state = Handler:element_start(Name, XmlNS, Attrs, HandlerState)}};
+
+handle_info({xml_element_end, Name}, 
+	#state{level = Level, handler = Handler,
+			 handler_state = HandlerState, stream_tag = StreamTag} = State) ->
+	%%io:format("</~s>~n", [Name]),
 	case Level of
-		1 ->
-			self() ! parse_end;
-		_ ->
-			void
-	end,
-    {noreply, State#state{level = Level - 1}};
-handle_info({xml_cdata, CData}, State) ->
-	io:format("~s", [CData]),
-    {noreply, State};
-handle_info(parse_end, State) ->
-	io:format("Done."),
-    {noreply, State};
+		1 when Name == StreamTag ->
+			{noreply, State#state{level = Level - 1, handler_state = Handler:stream_end(StreamTag, HandlerState)}};
+		L when L == 1 orelse (L == 2 andalso StreamTag /= ?NO_STREAM) ->
+			{noreply, State#state{level = Level - 1, handler_state = Handler:parse_end(Name, HandlerState)}};
+		L when L > 1 ->
+			{noreply, State#state{level = Level - 1, handler_state = Handler:element_end(Name, HandlerState)}}
+	end;
+
+handle_info({xml_cdata, CData}, 
+	#state{handler = Handler,
+			 handler_state = HandlerState} = State) ->
+	%%io:format("~s", [CData]),	
+    {noreply, State#state{handler_state = Handler:cdata(CData, HandlerState)}};
 
 handle_info(_Info, State) ->
     {noreply, State}.
@@ -219,9 +250,4 @@ code_change(OldVsn, State, Extra) ->
 %% ====================================================================
 %% Internal functions
 %% ====================================================================
--spec attrs_to_iolist([{binary(), binary()}], iolist()) -> iolist().
-attrs_to_iolist([], Acc) ->
-    Acc;
-attrs_to_iolist([{Name, Value} | Rest], Acc) ->
-    attrs_to_iolist(Rest, [" ", Name, "='", Value, "'" | Acc]).
 
