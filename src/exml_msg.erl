@@ -123,7 +123,7 @@ init([EventParser, Opts]) ->
 	HandlerModule = proplists:get_value(handler, Opts, ?DEFAULT_HANDLER),
 	HandlerData = proplists:get_value(handler_data, Opts),
     {ok, #state{event_parser = EventParser,
-				stream_tag  =  proplists:get_value(stream_tag, Opts, <<"stream">>),
+				stream_tag  =  proplists:get_value(stream_tag, Opts, ?NO_STREAM),
 				handler = proplists:get_value(handler, Opts, exml_default_handler),
 				handler_state = HandlerModule:init(HandlerData)}}.
 
@@ -145,9 +145,10 @@ init([EventParser, Opts]) ->
 	Timeout :: non_neg_integer() | infinity,
 	Reason :: term().
 %% ====================================================================
-handle_call(reset_parser, _From, State) ->
+handle_call(reset_parser, _From, 
+			#state{handler_state = HandlerData, handler = HandlerModule} = State) ->
 	reset_parser_nif(State#state.event_parser),
-    {reply, ok, State#state{handler_state = reset, level = 0}};
+    {reply, ok, State#state{handler_state = HandlerModule:init(HandlerData)}};
 
 handle_call(free_parser, _From, State) ->
 	free_parser_nif(State#state.event_parser),
@@ -205,8 +206,10 @@ handle_info({xml_element_end, Name},
 	%%io:format("</~s>~n", [Name]),
 	case Level of
 		1 when Name == StreamTag ->
+		  	reset_parser_nif(State#state.event_parser),
 			{noreply, State#state{level = Level - 1, handler_state = Handler:stream_end(StreamTag, HandlerState)}};
 		L when L == 1 orelse (L == 2 andalso StreamTag /= ?NO_STREAM) ->
+		  	reset_parser_nif(State#state.event_parser),
 			{noreply, State#state{level = Level - 1, handler_state = Handler:parse_end(Name, HandlerState)}};
 		L when L > 1 ->
 			{noreply, State#state{level = Level - 1, handler_state = Handler:element_end(Name, HandlerState)}}
