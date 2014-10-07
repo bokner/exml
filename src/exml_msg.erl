@@ -32,9 +32,12 @@
 
 -define(NO_STREAM, <<>>).
 
+-define(EXML_PATH_KEY, exml_path).
+
 -record(state, {event_parser :: exml_event:c_parser(),
 				level = 0 :: integer(),  
 				stream_tag = <<>> :: binary(),
+				path = <<>> :: binary,
 				handler :: function(), 
 				handler_state :: any()				
 }).
@@ -124,6 +127,7 @@ init([EventParser, Opts]) ->
 	HandlerData = proplists:get_value(handler_data, Opts),
     {ok, #state{event_parser = EventParser,
 				stream_tag  =  proplists:get_value(stream_tag, Opts, ?NO_STREAM),
+				path = <<>>,
 				handler = proplists:get_value(handler, Opts, exml_default_handler),
 				handler_state = HandlerModule:init(HandlerData)}}.
 
@@ -196,29 +200,46 @@ handle_info({xml_element_start, Name, XmlNS, Attrs},
 				handler_state = Handler:stream_start(Name, XmlNS, Attrs, HandlerState)}};
 
 handle_info({xml_element_start, Name, XmlNS, Attrs}, 
-	#state{level = Level, handler = Handler, handler_state = HandlerState} = State)  -> %% Element starts
-    {noreply, State#state{level = Level + 1, 
-				handler_state = Handler:element_start(Name, XmlNS, Attrs, HandlerState)}};
+	#state{level = Level, handler = Handler, handler_state = HandlerState} = State) 
+  		when (Level == 0 andalso stream_tag == ?NO_STREAM) orelse Level == 1 -> %% Top element starts
+    {noreply, State#state{level = Level + 1,
+						  path = Name, 
+				handler_state = Handler:parse_start(Name, XmlNS, Attrs, HandlerState)}};
+
+handle_info({xml_element_start, Name, XmlNS, Attrs}, 
+	#state{level = Level, handler = Handler, handler_state = HandlerState, path = Path} = State) -> %% Subelement starts
+	NewPath = path_down(Path, Name),
+    {noreply, State#state{level = Level + 1,
+						  path = NewPath, 
+				handler_state = Handler:parse_start(NewPath, XmlNS, Attrs, HandlerState)}};
 
 handle_info({xml_element_end, Name}, 
 	#state{level = Level, handler = Handler,
-			 handler_state = HandlerState, stream_tag = StreamTag} = State) ->
-	%%io:format("</~s>~n", [Name]),
-	case Level of
-		1 when Name == StreamTag ->
-		  	reset_parser_nif(State#state.event_parser),
-			{noreply, State#state{level = Level - 1, handler_state = Handler:stream_end(StreamTag, HandlerState)}};
-		L when L == 1 orelse (L == 2 andalso StreamTag /= ?NO_STREAM) ->
-		  	reset_parser_nif(State#state.event_parser),
-			{noreply, State#state{level = Level - 1, handler_state = Handler:parse_end(Name, HandlerState)}};
-		L when L > 1 ->
-			{noreply, State#state{level = Level - 1, handler_state = Handler:element_end(Name, HandlerState)}}
-	end;
+			 handler_state = HandlerState, stream_tag = StreamTag} = State) 
+  	when Level == 1 andalso Name == StreamTag -> %% Stream ends
+	reset_parser_nif(State#state.event_parser),
+	{noreply, State#state{level = Level - 1, handler_state = Handler:stream_end(StreamTag, HandlerState)}};
+
+handle_info({xml_element_end, Name}, 
+	#state{level = Level, handler = Handler,
+		   handler_state = HandlerState, 
+		   stream_tag = StreamTag} = State) 
+  	when Level == 1 orelse (Level == 2 andalso StreamTag /= ?NO_STREAM) -> %% Top element ends
+	reset_parser_nif(State#state.event_parser),
+	{noreply, State#state{level = Level - 1, path = <<>>, handler_state = Handler:parse_end(Name, HandlerState)}};
+
+handle_info({xml_element_end, Name}, 
+	#state{level = Level, handler = Handler,
+		   path = Path,
+		   handler_state = HandlerState} = State) when Level > 1 -> %% Subelement ends
+	NewPath = path_up(Path, Name),
+  	{noreply, State#state{level = Level - 1, 
+						  path = NewPath,
+						  handler_state = Handler:element_end(Path, HandlerState)}};
 
 handle_info({xml_cdata, CData}, 
 	#state{handler = Handler,
 			 handler_state = HandlerState} = State) ->
-	%%io:format("~s", [CData]),	
     {noreply, State#state{handler_state = Handler:cdata(CData, HandlerState)}};
 
 handle_info(_Info, State) ->
@@ -250,7 +271,16 @@ code_change(OldVsn, State, Extra) ->
     {ok, State}.
 
 
+
+
 %% ====================================================================
 %% Internal functions
 %% ====================================================================
+%% Context path
+%% TODO: Consider another representation
+%%
+path_down(Path, Name) ->
+	<<Path/binary, "/", Name/binary >>.
 
+path_up(Path, Name) ->  
+	binary:part(Path, 0, byte_size(Path) - byte_size(Name) - 1).

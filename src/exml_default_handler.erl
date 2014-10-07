@@ -4,6 +4,8 @@
 
 -module(exml_default_handler).
 
+-behaviour(exml_event_handler).
+
 %% ====================================================================
 %% API functions
 %% ====================================================================
@@ -12,7 +14,8 @@
 		stream_start/4,
 		element_start/4, 
 		element_end/2, 
-		cdata/2, 
+		cdata/2,
+		parse_start/4, 
 		parse_end/2,
 		stream_end/2]).
 
@@ -22,11 +25,11 @@ init(_) ->
 
 stream_start(Name, XmlNS, Attrs, HandlerState) ->
 	io:format("Stream started ~n"),
-	ignore.
+	HandlerState.
 
 stream_end(Name, HandlerState) ->
 	io:format("Stream ~s closed", [Name]),
-	ignore.
+	HandlerState.
 
 element_start(Name, XmlNS, Attrs, HandlerState) ->
 	io:format("<~s ~s>~n", [Name, attrs_to_iolist(Attrs, [])]),
@@ -39,6 +42,9 @@ element_end(Name, HandlerState) ->
 cdata(CData, HandlerState) ->
 	io:format("~s", [CData]),
 	ignore.
+
+parse_start(Name, XmlNS, Attrs, HandlerState) ->
+  io:format("Top element ~s started~n", [Name]).
 
 parse_end(Name, HandlerState) ->
 	io:format("Done parsing ~s", [Name]).
