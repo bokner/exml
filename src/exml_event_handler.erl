@@ -16,9 +16,9 @@
 
 -callback cdata(CData :: binary(), HandlerState :: any()) -> any().
 
--callback parse_start(Name :: binary(), XmlNS :: binary(), Attrs :: list(), HandlerState :: any()) -> any().
+-callback document_start(Name :: binary(), XmlNS :: binary(), Attrs :: list(), HandlerState :: any()) -> any().
 
--callback parse_end(Name :: binary(), HandlerState :: any()) -> any().
+-callback document_end(Name :: binary(), HandlerState :: any()) -> any().
 
 
 %% ====================================================================
